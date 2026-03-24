@@ -38,7 +38,9 @@ GridShredder requires:
 To create an isolated environment for GridShredder with all required dependencies:
 
 conda create -n gridshredder python=3.10
+
 conda activate gridshredder
+
 conda install -c conda-forge pyqt opencv numpy rawpy
 
 ---
