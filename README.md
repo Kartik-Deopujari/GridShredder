@@ -19,7 +19,7 @@ For biologists, this means you can go from “one big plate photo” to “one i
 - Export of **only fully enclosed wells** as individual PNG files:
   - Filenames: `{species}_{media}_{well_id}.png`.
 - Zoomable view with arrow‑key scrolling to inspect wells at high magnification.
-- 
+
 ---
 ## Dependencies
 
@@ -30,6 +30,17 @@ GridShredder requires:
 - numpy
 - opencv-python
 - rawpy
+  
+---
+
+## Recommended Conda environment
+
+To create an isolated environment for GridShredder with all required dependencies:
+
+conda create -n gridshredder python=3.10
+conda activate gridshredder
+conda install -c conda-forge pyqt opencv numpy rawpy
+
 ---
 
 ## Usage
