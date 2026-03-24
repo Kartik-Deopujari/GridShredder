@@ -2,7 +2,7 @@
 GridShredder
 
 GridShredder is a Qt-based GUI for interactively defining a grid over
-a plate image (e.g. rectangular agar plate), adjusting grid lines, loading
+a plate image (e.g. 96‑well agar plate), adjusting grid lines, loading
 metadata, and exporting per‑well image crops with consistent well IDs.
 
 Major components:
@@ -72,13 +72,6 @@ class WellPlateConfig:
 class ImageCanvas(QtWidgets.QLabel):
     """
     QLabel-based canvas that shows the plate image and interactive grid lines.
-
-    Responsibilities
-    ----------------
-    - Manage loading and displaying images without quality loss.
-    - Keep track of normalized grid line coordinates.
-    - Draw grid lines over the image.
-    - Handle mouse interaction for dragging grid lines to refine well borders.
     """
 
     grid_changed = QtCore.pyqtSignal()
@@ -87,9 +80,6 @@ class ImageCanvas(QtWidgets.QLabel):
         super().__init__(parent)
         self.setMouseTracking(True)
         self.setAlignment(QtCore.Qt.AlignCenter)
-        # Do NOT let the pixmap dictate the widget size
-        self.setSizePolicy(QtWidgets.QSizePolicy.Ignored,
-                           QtWidgets.QSizePolicy.Ignored)
 
         # Core image state
         self.image = None        # OpenCV BGR image
@@ -111,9 +101,6 @@ class ImageCanvas(QtWidgets.QLabel):
     def load_image(self, path: str):
         """
         Load image from disk.
-
-        For RAW (e.g. NEF, CR2, ARW, DNG) uses rawpy for high-quality decoding.
-        For standard formats uses cv2.imread.
         """
         ext = os.path.splitext(path)[1].lower()
         if ext in [".nef", ".cr2", ".cr3", ".arw", ".dng"]:
@@ -154,38 +141,23 @@ class ImageCanvas(QtWidgets.QLabel):
         qimg = QtGui.QImage(
             rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888
         )
-        # Deep copy so backing buffer remains valid
         qimg = qimg.copy()
         self.qpix = QtGui.QPixmap.fromImage(qimg)
 
     def _update_scaled_pixmap(self):
         """
-        Compute and set the scaled pixmap according to current zoom and
-        the available widget size, maintaining aspect ratio, without
-        forcing the window to resize.
+        Compute and set the scaled pixmap according to current zoom.
+        Does not change the window size; scrolling is handled by QScrollArea.
         """
         if self.qpix is None:
             return
 
-        # Base on *image* size
         img_w = self.qpix.width()
         img_h = self.qpix.height()
 
         # Desired size based on zoom
-        desired_w = int(img_w * self.zoom)
-        desired_h = int(img_h * self.zoom)
-
-        # Available drawing area (current label size)
-        avail_w = max(1, self.width())
-        avail_h = max(1, self.height())
-
-        # Safety cap to avoid absurdly huge pixmaps if zoom is large
-        max_factor = 4
-        w = min(desired_w, avail_w * max_factor)
-        h = min(desired_h, avail_h * max_factor)
-
-        w = max(1, w)
-        h = max(1, h)
+        w = max(1, int(img_w * self.zoom))
+        h = max(1, int(img_h * self.zoom))
 
         scaled = self.qpix.scaled(
             w, h,
@@ -193,25 +165,25 @@ class ImageCanvas(QtWidgets.QLabel):
             QtCore.Qt.SmoothTransformation
         )
 
-        # Center in current label rect
-        x_off = (self.width() - scaled.width()) // 2
-        y_off = (self.height() - scaled.height()) // 2
         self.setPixmap(scaled)
-        self._scaled_rect = QtCore.QRect(
-            x_off, y_off, scaled.width(), scaled.height()
-        )
+        # When used inside a scroll area, the widget size should match pixmap size
+        self.resize(scaled.size())
+        self._scaled_rect = QtCore.QRect(0, 0, scaled.width(), scaled.height())
 
     def resizeEvent(self, event):
-        """Handle widget resize by updating the scaled pixmap."""
+        """Ensure scaled rect is updated if the label is resized."""
         super().resizeEvent(event)
-        self._update_scaled_pixmap()
+        # When inside a scroll area, resize is driven by pixmap size; no rescale here.
+        if self.pixmap():
+            self._scaled_rect = QtCore.QRect(0, 0,
+                                             self.pixmap().width(),
+                                             self.pixmap().height())
 
     def set_zoom(self, factor: float):
-        """
-        Set zoom factor (clamped between 0.1 and 8.0) and update drawing.
-        """
+        """Set zoom factor (clamped) and update drawing."""
         self.zoom = max(0.1, min(8.0, factor))
         self._update_scaled_pixmap()
+        self.grid_changed.emit()
 
     def zoom_in(self):
         """Increase zoom by 25%."""
@@ -223,42 +195,33 @@ class ImageCanvas(QtWidgets.QLabel):
 
     # ---------------- Coordinate transforms ----------------
     def _image_coords_to_screen(self, x_norm: float, y_norm: float):
-        """
-        Convert normalized image coordinates (0..1, 0..1) to screen coordinates.
-        """
+        """Convert normalized image coordinates to screen coordinates."""
         if self._scaled_rect is None:
             return None
-        x = self._scaled_rect.left() + int(x_norm * self._scaled_rect.width())
-        y = self._scaled_rect.top() + int(y_norm * self._scaled_rect.height())
+        x = int(x_norm * self._scaled_rect.width())
+        y = int(y_norm * self._scaled_rect.height())
         return QtCore.QPoint(x, y)
 
     def _screen_to_image_norm(self, x: int, y: int):
-        """
-        Convert screen point to normalized image coordinates (0..1, 0..1).
-        """
+        """Convert screen point to normalized image coordinates (0..1, 0..1)."""
         if self._scaled_rect is None:
             return None, None
-        rel_x = (x - self._scaled_rect.left()) / self._scaled_rect.width()
-        rel_y = (y - self._scaled_rect.top()) / self._scaled_rect.height()
+        rel_x = x / self._scaled_rect.width()
+        rel_y = y / self._scaled_rect.height()
         rel_x = min(max(rel_x, 0), 1)
         rel_y = min(max(rel_y, 0), 1)
         return rel_x, rel_y
 
     # ---------------- Grid config ----------------
     def set_plate_config(self, config: WellPlateConfig):
-        """
-        Replace current grid configuration with a new WellPlateConfig.
-        """
+        """Replace current grid configuration with a new WellPlateConfig."""
         self.plate_config = config
         self.update()
         self.grid_changed.emit()
 
     # ---------------- Painting ----------------
     def paintEvent(self, event):
-        """
-        Custom paint event to draw the semi-transparent background, the image
-        pixmap, and the current grid lines.
-        """
+        """Draw background, pixmap, and grid lines."""
         super().paintEvent(event)
         if self.image is None or self._scaled_rect is None:
             return
@@ -272,7 +235,7 @@ class ImageCanvas(QtWidgets.QLabel):
 
         # Draw pixmap
         if self.pixmap():
-            painter.drawPixmap(self._scaled_rect, self.pixmap())
+            painter.drawPixmap(0, 0, self.pixmap())
 
         # Grid lines
         pen = QtGui.QPen(QtCore.Qt.green, 1, QtCore.Qt.SolidLine)
@@ -296,10 +259,7 @@ class ImageCanvas(QtWidgets.QLabel):
 
     # ---------------- Mouse interaction for dragging lines ----------------
     def mousePressEvent(self, event):
-        """
-        Detect whether the mouse press is close to a grid line and
-        start dragging that line.
-        """
+        """Detect whether the mouse press is close to a grid line."""
         if self.image is None or self._scaled_rect is None:
             return
         pos = event.pos()
@@ -331,10 +291,7 @@ class ImageCanvas(QtWidgets.QLabel):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        """
-        When dragging_line is set, update the corresponding grid line
-        position based on mouse movement while enforcing minimal spacing.
-        """
+        """Update the corresponding grid line position while dragging."""
         if self.dragging_line is None or self._scaled_rect is None:
             super().mouseMoveEvent(event)
             return
@@ -371,11 +328,6 @@ class ImageCanvas(QtWidgets.QLabel):
     def get_well_roi(self, row: int, col: int, require_enclosed: bool = True):
         """
         Return an OpenCV image for well at (row, col) using current grid.
-
-        Returns
-        -------
-        np.ndarray or None
-            BGR image containing the well ROI, or None if invalid or open.
         """
         if self.image is None:
             return None
@@ -413,10 +365,6 @@ class ImageCanvas(QtWidgets.QLabel):
 class MetadataDialog(QtWidgets.QDialog):
     """
     Dialog to load CSV metadata and preview mapping: well_id -> species.
-
-    Expected columns (case-insensitive, flexible):
-    - well_id / WellID / well / Well
-    - species / Species / strain / Strain
     """
 
     def __init__(self, parent=None):
@@ -528,18 +476,6 @@ class MetadataDialog(QtWidgets.QDialog):
 class MainWindow(QtWidgets.QMainWindow):
     """
     Main application window for GridShredder.
-
-    Responsibilities
-    ----------------
-    - Host the ImageCanvas as central widget.
-    - Provide toolbars for:
-      * Opening images.
-      * Loading metadata.
-      * Setting media labels.
-      * Resetting and manipulating grid lines.
-      * Auto‑adjusting grid based on plate/colony detection.
-      * Zoom and label orientation.
-      * Exporting well images.
     """
 
     def __init__(self):
@@ -547,8 +483,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("GridShredder")
         self.resize(1400, 900)
 
+        # Canvas + scroll area
         self.canvas = ImageCanvas()
-        self.setCentralWidget(self.canvas)
+        self.scroll_area = QtWidgets.QScrollArea()
+        self.scroll_area.setWidget(self.canvas)
+        self.scroll_area.setWidgetResizable(False)
+        self.setCentralWidget(self.scroll_area)
 
         self.plate_config = self.canvas.plate_config
         self.metadata = {}  # well_id -> species
@@ -579,7 +519,6 @@ class MainWindow(QtWidgets.QMainWindow):
         palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor("#F0F0F0"))
         self.setPalette(palette)
 
-        # Toolbar and buttons: high‑contrast teal accent on dark background
         self.setStyleSheet(
             """
             QToolBar {
@@ -592,13 +531,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 border: 1px solid #101010;
                 border-radius: 3px;
                 color: #F0F0F0;
-                background-color: #0097A7;          /* bright teal */
+                background-color: #0097A7;
             }
             QToolButton:hover {
-                background-color: #00BCD4;          /* lighter teal */
+                background-color: #00BCD4;
             }
             QToolButton:pressed {
-                background-color: #006978;          /* darker teal */
+                background-color: #006978;
                 padding-top: 5px;
                 padding-left: 9px;
             }
@@ -764,7 +703,6 @@ class MainWindow(QtWidgets.QMainWindow):
         """Reset grid to default uniform 8×12 layout."""
         self.plate_config = WellPlateConfig()
         self.canvas.set_plate_config(self.plate_config)
-        # Reset undo stacks as well
         self._added_vertical_indices.clear()
         self._added_horizontal_indices.clear()
         self.statusBar().showMessage("Grid reset to default 8×12.")
@@ -779,10 +717,7 @@ class MainWindow(QtWidgets.QMainWindow):
         new_x = (lines[idx] + lines[idx + 1]) / 2.0
         insert_pos = idx + 1
         lines.insert(insert_pos, new_x)
-
-        # Remember which line we added
         self._added_vertical_indices.append(insert_pos)
-
         self.canvas.update()
         self.canvas.grid_changed.emit()
         self.statusBar().showMessage("Inserted extra vertical gridline.")
@@ -797,32 +732,21 @@ class MainWindow(QtWidgets.QMainWindow):
         new_y = (lines[idx] + lines[idx + 1]) / 2.0
         insert_pos = idx + 1
         lines.insert(insert_pos, new_y)
-
-        # Remember which line we added
         self._added_horizontal_indices.append(insert_pos)
-
         self.canvas.update()
         self.canvas.grid_changed.emit()
         self.statusBar().showMessage("Inserted extra horizontal gridline.")
 
     def remove_last_added_lines(self):
-        """
-        Remove the most recently added vertical and horizontal gridlines, if present.
-
-        Uses stacks of indices recorded when lines were added so that the
-        correct lines (in reverse insertion order) are removed.
-        """
+        """Remove the most recently added vertical and horizontal gridlines."""
         removed_any = False
 
-        # Remove last added vertical line, if any
         if self._added_vertical_indices:
             idx = self._added_vertical_indices.pop()
-            # ensure it's still an inner line
             if 0 < idx < len(self.plate_config.col_lines) - 1:
                 self.plate_config.col_lines.pop(idx)
                 removed_any = True
 
-        # Remove last added horizontal line, if any
         if self._added_horizontal_indices:
             idx = self._added_horizontal_indices.pop()
             if 0 < idx < len(self.plate_config.row_lines) - 1:
@@ -842,17 +766,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---------------- Auto‑adjust via circle/contour detection ----------------
     def auto_adjust_grid_via_circle(self):
-        """
-        Detect the plate region or dominant colony area and adjust the grid.
-
-        Strategy
-        --------
-        1. Grayscale + blur.
-        2. HoughCircles for circular plates.
-        3. Adaptive threshold + morphology + contour detection.
-        4. Choose circle bounding box if present, otherwise largest contour.
-        5. Uniformly redistribute grid lines inside the chosen bounding box.
-        """
+        """Detect the plate region or dominant colony area and adjust the grid."""
         if self.canvas.image is None:
             QtWidgets.QMessageBox.warning(
                 self, "No image", "Load an image first."
@@ -957,9 +871,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ---------------- Label orientation and export ----------------
     def set_flip_labels(self, checked: bool):
-        """
-        Toggle label orientation (left→right or right→left) used in well IDs.
-        """
+        """Toggle label orientation (left→right or right→left) used in well IDs."""
         self.flip_label = checked
         if self.flip_label:
             self.flip_label_action.setText("Right→Left labels (ON)")
@@ -973,22 +885,14 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
     def well_id_for(self, row: int, col: int) -> str:
-        """
-        Convert (row, col) to well ID like A01, B06, H12.
-
-        Column numbering can be flipped depending on self.flip_label.
-        """
+        """Convert (row, col) to well ID like A01, B06, H12."""
         row_letter = chr(ord("A") + row)
         n_cols = self.canvas.plate_config.n_col_segments
         num = col + 1 if not self.flip_label else n_cols - col
         return f"{row_letter}{num:02d}"
 
     def export_wells(self):
-        """
-        Export each enclosed well as a PNG image to a user-selected folder.
-
-        Filenames: {species}_{media_name}_{well_id}.png
-        """
+        """Export each enclosed well as a PNG image to a user-selected folder."""
         if self.canvas.image is None:
             QtWidgets.QMessageBox.warning(
                 self, "No image", "Load an image first."
@@ -1041,14 +945,32 @@ class MainWindow(QtWidgets.QMainWindow):
             f"(skipped {skipped_open} non‑enclosed wells)."
         )
 
+    # ---------------- Keyboard navigation (scroll with arrows) ----------------
+    def keyPressEvent(self, event):
+        """Use arrow keys to scroll the image in the scroll area."""
+        key = event.key()
+        step = 40  # pixels per keypress
+
+        hbar = self.scroll_area.horizontalScrollBar()
+        vbar = self.scroll_area.verticalScrollBar()
+
+        if key == QtCore.Qt.Key_Left:
+            hbar.setValue(hbar.value() - step)
+        elif key == QtCore.Qt.Key_Right:
+            hbar.setValue(hbar.value() + step)
+        elif key == QtCore.Qt.Key_Up:
+            vbar.setValue(vbar.value() - step)
+        elif key == QtCore.Qt.Key_Down:
+            vbar.setValue(vbar.value() + step)
+        else:
+            super().keyPressEvent(event)
+
 
 # ------------------------------------------------------------------
 # Application entry point
 # ------------------------------------------------------------------
 def main():
-    """
-    Configure high‑DPI settings and launch the Qt application.
-    """
+    """Configure high‑DPI settings and launch the Qt application."""
     QtWidgets.QApplication.setAttribute(
         QtCore.Qt.AA_EnableHighDpiScaling, True
     )
@@ -1067,6 +989,5 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         import traceback
-
         print("Fatal error in main():", e)
         traceback.print_exc()
