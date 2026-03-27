@@ -16,11 +16,11 @@ AI Generated image.
 - Customizable box size to accomodate for varying colony shape and size.
 - Interactive grid and box overlay on plate images.
 - Support for common image formats (PNG, JPG, TIFF, BMP, GIF) and RAW formats (NEF, CR2/CR3, ARW, DNG) via `rawpy`.
-- Metadata import from CSV to map `well_id → species` (or strain).
+- Metadata import from CSV to map `well_id → sample_ID`.
 - Media label support (e.g. `YPD`, `PDA`) embedded in filenames.
 - Left→right or right→left column labelling (`A01` at left or right).
 - Export of **only fully enclosed wells** as individual PNG files:
-  - Filenames: `{species}_{media}_{well_id}.png`.
+  - Filenames: `{sample_ID}_{media}_{well_id}.png`.
 - Zoomable view with arrow‑key scrolling to inspect wells at high magnification.
 
 ---
