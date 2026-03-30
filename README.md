@@ -103,3 +103,6 @@ If your plate layout starts at the right (i.e. `A01` is on the right edge), togg
 ### 5. Export wells
 
 Use the **“Export wells”** button to export all cropped wells to a chosen output folder.  
+
+--
+Developed by Kartik Deopujari with assistance from AI coding tools; final design and implementation curated and tested by the author.
